@@ -1,97 +1,83 @@
-from OpenSSL import crypto
 import os
-from pathlib import Path
-import logging
+import asyncio
+from datetime import datetime, timedelta
+from cryptography import x509
+from cryptography.x509.oid import NameOID
+from cryptography.hazmat.primitives import hashes, serialization
+from cryptography.hazmat.primitives.asymmetric import rsa
+from cryptography.hazmat.backends import default_backend
 
-class CertificateGenerator:
-    def __init__(self, cert_dir="config/certs"):
-        self.cert_dir = Path(cert_dir)
-        self.cert_dir.mkdir(parents=True, exist_ok=True)
-        self.logger = logging.getLogger("CertGenerator")
+async def generate_test_certificates():
+    """Generate test certificates for all services"""
+    try:
+        cert_dir = "certs"
+        if not os.path.exists(cert_dir):
+            os.makedirs(cert_dir)
 
-    def generate_node_certificates(self, node_id, country="CA", state="Ontario", 
-                                 locality="Ottawa", organization="Healthcare System",
-                                 organizational_unit="Monitoring", common_name=None):
-        """Generate certificate and private key for a node"""
-        try:
+        certificates = {}
+        services = [
+            'collector',
+            'processor',
+            'storage',
+            'notification',
+            'ui'
+        ]
+
+        for service in services:
             # Generate key
-            key = crypto.PKey()
-            key.generate_key(crypto.TYPE_RSA, 2048)
+            private_key = rsa.generate_private_key(
+                public_exponent=65537,
+                key_size=2048,
+                backend=default_backend()
+            )
 
             # Generate certificate
-            cert = crypto.X509()
-            cert.get_subject().C = country
-            cert.get_subject().ST = state
-            cert.get_subject().L = locality
-            cert.get_subject().O = organization
-            cert.get_subject().OU = organizational_unit
-            cert.get_subject().CN = common_name or f"node_{node_id}"
+            subject = issuer = x509.Name([
+                x509.NameAttribute(NameOID.COMMON_NAME, f'{service}.healthcare.local')
+            ])
 
-            cert.set_serial_number(int.from_bytes(os.urandom(16), byteorder="big"))
-            cert.gmtime_adj_notBefore(0)
-            cert.gmtime_adj_notAfter(365*24*60*60)  # Valid for one year
-            cert.set_issuer(cert.get_subject())
-            cert.set_pubkey(key)
-            cert.sign(key, 'sha256')
+            cert = x509.CertificateBuilder().subject_name(
+                subject
+            ).issuer_name(
+                issuer
+            ).public_key(
+                private_key.public_key()
+            ).serial_number(
+                x509.random_serial_number()
+            ).not_valid_before(
+                datetime.utcnow()
+            ).not_valid_after(
+                datetime.utcnow() + timedelta(days=365)
+            ).add_extension(
+                x509.SubjectAlternativeName([
+                    x509.DNSName('localhost'),
+                    x509.DNSName('127.0.0.1')
+                ]),
+                critical=False,
+            ).sign(private_key, hashes.SHA256(), default_backend())
 
-            # Save certificate and private key
-            cert_path = self.cert_dir / f"node_{node_id}_cert.pem"
-            key_path = self.cert_dir / f"node_{node_id}_key.pem"
+            # Save certificate
+            cert_path = os.path.join(cert_dir, f"{service}_cert.pem")
+            key_path = os.path.join(cert_dir, f"{service}_key.pem")
 
             with open(cert_path, "wb") as f:
-                f.write(crypto.dump_certificate(crypto.FILETYPE_PEM, cert))
+                f.write(cert.public_bytes(serialization.Encoding.PEM))
 
             with open(key_path, "wb") as f:
-                f.write(crypto.dump_privatekey(crypto.FILETYPE_PEM, key))
+                f.write(private_key.private_bytes(
+                    encoding=serialization.Encoding.PEM,
+                    format=serialization.PrivateFormat.PKCS8,
+                    encryption_algorithm=serialization.NoEncryption()
+                ))
 
-            self.logger.info(f"Generated certificates for node {node_id}")
-            return cert_path, key_path
+            certificates[service] = (cert_path, key_path)
 
-        except Exception as e:
-            self.logger.error(f"Error generating certificates for node {node_id}: {e}")
-            raise
+        return certificates
 
-    def generate_ca_certificate(self):
-        """Generate a Certificate Authority certificate"""
-        try:
-            # Generate key
-            key = crypto.PKey()
-            key.generate_key(crypto.TYPE_RSA, 4096)
+    except Exception as e:
+        print(f"Error generating certificates: {e}")
+        raise
 
-            # Generate certificate
-            cert = crypto.X509()
-            cert.get_subject().C = "CA"
-            cert.get_subject().ST = "Ontario"
-            cert.get_subject().L = "Ottawa"
-            cert.get_subject().O = "Healthcare Monitoring CA"
-            cert.get_subject().OU = "Security"
-            cert.get_subject().CN = "Healthcare Monitoring Root CA"
-
-            cert.set_serial_number(int.from_bytes(os.urandom(16), byteorder="big"))
-            cert.gmtime_adj_notBefore(0)
-            cert.gmtime_adj_notAfter(365*24*60*60*10)  # Valid for 10 years
-            cert.set_issuer(cert.get_subject())
-            cert.set_pubkey(key)
-            cert.add_extensions([
-                crypto.X509Extension(b"basicConstraints", True, b"CA:TRUE, pathlen:0"),
-                crypto.X509Extension(b"keyUsage", True, b"keyCertSign, cRLSign"),
-                crypto.X509Extension(b"subjectKeyIdentifier", False, b"hash", subject=cert),
-            ])
-            cert.sign(key, 'sha256')
-
-            # Save CA certificate and private key
-            ca_cert_path = self.cert_dir / "ca_cert.pem"
-            ca_key_path = self.cert_dir / "ca_key.pem"
-
-            with open(ca_cert_path, "wb") as f:
-                f.write(crypto.dump_certificate(crypto.FILETYPE_PEM, cert))
-
-            with open(ca_key_path, "wb") as f:
-                f.write(crypto.dump_privatekey(crypto.FILETYPE_PEM, key))
-
-            self.logger.info("Generated CA certificates")
-            return ca_cert_path, ca_key_path
-
-        except Exception as e:
-            self.logger.error(f"Error generating CA certificates: {e}")
-            raise
+if __name__ == "__main__":
+    # Test certificate generation
+    asyncio.run(generate_test_certificates())

@@ -87,6 +87,42 @@ async def simulate_health_data(collection_service):
             logger.error(f"Error simulating health data: {str(e)}", exc_info=True)
             await asyncio.sleep(1)
 
+async def establish_service_connections(collectors, processors, storages, notifications, uis):
+    """Establish connections between services with load balancing"""
+    try:
+        # Connect collectors to processors
+        for collector in collectors:
+            for processor in processors:
+                collector.establish_secure_connection(
+                    processor.host,
+                    processor.port
+                )
+        
+        # Connect processors to storage and notification
+        for processor in processors:
+            for storage in storages:
+                processor.establish_secure_connection(
+                    storage.host,
+                    storage.port
+                )
+            for notification in notifications:
+                processor.establish_secure_connection(
+                    notification.host,
+                    notification.port
+                )
+        
+        # Connect notification to UI
+        for notification in notifications:
+            for ui in uis:
+                notification.establish_secure_connection(
+                    ui.host,
+                    ui.port
+                )
+                
+    except Exception as e:
+        logging.error(f"Failed to establish connections: {e}", exc_info=True)
+        raise
+
 async def main():
     try:
         # Setup logging first
@@ -99,23 +135,27 @@ async def main():
         system_logger.info("Generating certificates for services...")
         certificates = await setup_certificates()
 
-        # Initialize services
-        collection_service = DataCollectionService(
-            node_id="collector_1",
-            host='127.0.0.1',
-            port=5001,
-            certfile=certificates['collector'][0],
-            keyfile=certificates['collector'][1]
-        )
-
-        processing_service = DataProcessingService(
-            node_id="processor_1",
-            host='127.0.0.1',
-            port=5002,
-            certfile=certificates['processor'][0],
-            keyfile=certificates['processor'][1]
-        )
-
+        # Initialize multiple instances of each service
+        collection_services = [
+            DataCollectionService(
+                node_id=f"collector_{i}",
+                host='127.0.0.1',
+                port=5001 + i,
+                certfile=certificates['collector'][0],
+                keyfile=certificates['collector'][1]
+            ) for i in range(2)  # Create 2 collector instances
+        ]
+        
+        processing_services = [
+            DataProcessingService(
+                node_id=f"processor_{i}",
+                host='127.0.0.1',
+                port=5101 + i,
+                certfile=certificates['processor'][0],
+                keyfile=certificates['processor'][1]
+            ) for i in range(2)  # Create 2 processor instances
+        ]
+        
         storage_service = StorageService(
             node_id="storage_1",
             host='127.0.0.1',
@@ -142,59 +182,46 @@ async def main():
             ui_port=8000
         )
 
-        # Add UI service to the list of services
-        services = [
-            collection_service,
-            processing_service,
-            storage_service,
-            notification_service,
-            ui_service
-        ]
+        # Register backup nodes
+        for i, service in enumerate(collection_services[1:], 1):
+            collection_services[0].failover_manager.register_node(
+                f"collector_{i}",
+                is_primary=False
+            )
         
         # Start all services
-        for service in services:
+        all_services = (
+            collection_services +
+            processing_services +
+            [storage_service, notification_service, ui_service]
+        )
+        
+        for service in all_services:
             service.start()
-            system_logger.info(f"Started {service.service_name} service")
-
-        # Connect notification service to UI service
-        notification_service.establish_secure_connection('127.0.0.1', 5005)
-        system_logger.info("Connected notification service to UI service")
-
-        # Wait for services to start
-        await asyncio.sleep(2)
-
-        # Establish connections
-        try:
-            collection_service.establish_secure_connection('127.0.0.1', 5002)
-            system_logger.info("Connected collection service to processing service")
-            
-            processing_service.establish_secure_connection('127.0.0.1', 5003)
-            system_logger.info("Connected processing service to storage service")
-            
-            processing_service.establish_secure_connection('127.0.0.1', 5004)
-            system_logger.info("Connected processing service to notification service")
-            
-        except Exception as e:
-            system_logger.error(f"Failed to establish connections: {e}", exc_info=True)
-            return
-
-        # Start data simulation
-        simulation_task = asyncio.create_task(simulate_health_data(collection_service))
+            system_logger.info(f"Started {service.service_name} service {service.node_id}")
+        
+        # Establish connections with load balancing
+        await establish_service_connections(
+            collection_services,
+            processing_services,
+            [storage_service],
+            [notification_service],
+            [ui_service]
+        )
+        
+        # Start data simulation with load balancing
+        simulation_task = asyncio.create_task(
+            simulate_health_data_with_lb(collection_services[0])
+        )
         
         # Keep the main task running
-        try:
-            while True:
-                await asyncio.sleep(1)
-        except KeyboardInterrupt:
-            simulation_task.cancel()
-            system_logger.info("Shutting down services...")
-            # Cleanup services
-            for service in services:
-                if hasattr(service, 'stop'):
-                    service.stop()
-
-    except Exception as e:
-        system_logger.error(f"System error: {e}", exc_info=True)
+        while True:
+            await asyncio.sleep(1)
+            
+    except KeyboardInterrupt:
+        system_logger.info("Shutting down services...")
+        for service in all_services:
+            service.stop()
 
 if __name__ == "__main__":
     asyncio.run(main())
