@@ -155,3 +155,46 @@ class BaseNode:
     async def process_message(self, message: Dict[str, Any]) -> Dict[str, Any]:
         """Process received message - to be implemented by subclasses"""
         raise NotImplementedError
+
+    async def _stop_node(self):
+        """Stop the node without stopping fault tolerance"""
+        if hasattr(self, 'server'):
+            self.server.close()
+            await self.server.wait_closed()
+        
+        if hasattr(self, 'writer'):
+            self.writer.close()
+            try:
+                await self.writer.wait_closed()
+            except Exception:
+                pass
+        
+        self._is_running = False
+
+    async def close(self):
+        """Close the service and cleanup resources"""
+        try:
+            if hasattr(self, 'server'):
+                self.server.close()
+                await self.server.wait_closed()
+            
+            if hasattr(self, 'writer'):
+                self.writer.close()
+                try:
+                    await self.writer.wait_closed()
+                except Exception:
+                    pass
+            
+            if hasattr(self, '_connections'):
+                for writer in self._connections.values():
+                    try:
+                        writer.close()
+                        await writer.wait_closed()
+                    except Exception:
+                        pass
+            
+            self._is_running = False
+            
+        except Exception as e:
+            logging.error(f"Error closing {self.__class__.__name__}: {e}")
+            raise
