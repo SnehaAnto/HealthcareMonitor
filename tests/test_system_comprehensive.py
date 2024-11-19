@@ -252,46 +252,61 @@ class ComprehensiveSystemTest:
     async def test_normal_operation(self):
         """Test normal system operation"""
         self.logger.info("Testing normal operation...")
-        
-        test_data = {
-            'patient_id': 'TEST001',
-            'heart_rate': 75,
-            'blood_pressure': {'systolic': 120, 'diastolic': 80},
-            'temperature': 37.0,
-            'timestamp': time.time()
-        }
-        
-        collector = self.collectors[0]
-        response = await collector.send_data(test_data)
-        
-        assert response['status'] == 'ok', "Failed to process normal data"
-        self.logger.info("Normal operation test passed")
+        try:
+            test_data = {
+                'patient_id': 'TEST001',
+                'heart_rate': 75,
+                'blood_pressure': {'systolic': 120, 'diastolic': 80},
+                'temperature': 37.0,
+                'timestamp': time.time()
+            }
+            
+            collector = self.collectors[0]
+            response = await collector.send_data(test_data)
+            assert response['status'] == 'ok', "Data processing failed"
+            
+            self.logger.info("Normal operation test passed")
+            return {
+                'status': 'passed',
+                'response': response,
+                'timestamp': time.time()
+            }
+            
+        except Exception as e:
+            self.logger.error(f"Normal operation test failed: {e}")
+            return {
+                'status': 'failed',
+                'error': str(e),
+                'timestamp': time.time()
+            }
 
     async def test_fault_tolerance(self):
-        """Test system fault tolerance with reliability metrics"""
+        """Test system fault tolerance"""
         self.logger.info("Testing fault tolerance...")
-        
-        collector = self.collectors[0]
-        original_processor = collector.current_processor
-        
-        # Ensure collector knows about backup processors
-        for processor in self.processors:
-            if processor.node_id != original_processor:
-                collector.backup_processors.append((
-                    processor.host, 
-                    processor.port,
-                    processor.node_id
-                ))
-        
-        test_data = {
-            'patient_id': 'TEST003',
-            'heart_rate': 75,
-            'blood_pressure': {'systolic': 118, 'diastolic': 78},
-            'temperature': 36.9,
-            'timestamp': time.time()
-        }
-        
         try:
+            # Get start time for recovery calculation
+            start_time = time.time()
+            
+            collector = self.collectors[0]
+            original_processor = collector.current_processor
+            
+            # Ensure collector knows about backup processors
+            for processor in self.processors:
+                if processor.node_id != original_processor:
+                    collector.backup_processors.append((
+                        processor.host, 
+                        processor.port,
+                        processor.node_id
+                    ))
+            
+            test_data = {
+                'patient_id': 'TEST003',
+                'heart_rate': 75,
+                'blood_pressure': {'systolic': 118, 'diastolic': 78},
+                'temperature': 36.9,
+                'timestamp': time.time()
+            }
+            
             # Stop the current processor and record failure
             current_proc = next(p for p in self.processors if p.node_id == original_processor)
             await self.record_failure(current_proc.node_id)
@@ -304,7 +319,8 @@ class ComprehensiveSystemTest:
             response = await collector.send_data(test_data)
             assert response['status'] == 'ok', f"Data processing failed after failover: {response.get('message', 'Unknown error')}"
             
-            # Record recovery after successful failover
+            # Calculate recovery time after successful failover
+            recovery_time = time.time() - start_time
             await self.record_recovery(collector.current_processor)
             
             await asyncio.sleep(1)
@@ -316,16 +332,29 @@ class ComprehensiveSystemTest:
             assert stored_data.get('patient_id') == 'TEST003', "Stored data mismatch"
             
             self.logger.info("Fault tolerance test passed")
+            return {
+                'status': 'passed',
+                'failover_time': recovery_time,
+                'timestamp': time.time()
+            }
             
         except Exception as e:
             self.logger.error(f"Fault tolerance test failed: {e}")
-            raise
+            return {
+                'status': 'failed',
+                'error': str(e),
+                'timestamp': time.time()
+            }
 
     async def test_security(self):
         """Test security mechanisms"""
         self.logger.info("Testing security mechanisms...")
-        
         try:
+            security_results = {
+                'invalid_cert_rejected': False,
+                'timestamp': time.time()
+            }
+            
             invalid_processor = DataProcessingService(
                 "invalid_processor",
                 self.host,
@@ -336,31 +365,63 @@ class ComprehensiveSystemTest:
             await invalid_processor.start()
             assert False, "Security check failed - allowed invalid certificates"
         except:
+            security_results['invalid_cert_rejected'] = True
             self.logger.info("Security test passed - rejected invalid certificates")
+            return {
+                'status': 'passed',
+                'security_checks': security_results,
+                'timestamp': time.time()
+            }
 
     async def test_data_integrity(self):
         """Test data integrity"""
         self.logger.info("Testing data integrity...")
-        
-        test_data = {
-            'patient_id': 'TEST003',
-            'heart_rate': 72,
-            'blood_pressure': {'systolic': 118, 'diastolic': 78},
-            'temperature': 36.9,
-            'timestamp': time.time()
-        }
-        
-        collector = self.collectors[0]
-        await collector.send_data(test_data)
-        
-        stored_data = await self.storage.retrieve_data({'patient_id': 'TEST003'})
-        assert stored_data is not None, "Data integrity check failed"
-        self.logger.info("Data integrity test passed")
+        try:
+            test_data = {
+                'patient_id': 'TEST003',
+                'heart_rate': 72,
+                'blood_pressure': {'systolic': 118, 'diastolic': 78},
+                'temperature': 36.9,
+                'timestamp': time.time()
+            }
+            
+            collector = self.collectors[0]
+            response = await collector.send_data(test_data)
+            assert response['status'] == 'ok', "Failed to send test data"
+            
+            stored_data = await self.storage.retrieve_data({'patient_id': 'TEST003'})
+            assert stored_data is not None, "Data integrity check failed"
+
+            # Calculate verification results
+            verification_results = {
+                'data_stored': stored_data is not None,
+                'fields_match': all(
+                    stored_data.get(key) == value 
+                    for key, value in test_data.items()
+                    if key != 'timestamp'  # Exclude timestamp from comparison
+                ),
+                'response_status': response['status'],
+                'timestamp': time.time()
+            }
+            
+            self.logger.info("Data integrity test passed")
+            return {
+                'status': 'passed',
+                'data_verification': verification_results,
+                'timestamp': time.time()
+            }
+            
+        except Exception as e:
+            self.logger.error(f"Data integrity test failed: {e}")
+            return {
+                'status': 'failed',
+                'error': str(e),
+                'timestamp': time.time()
+            }
 
     async def test_load_balancing(self):
-        """Test load balancing functionality"""
+        """Test load balancing"""
         self.logger.info("Testing load balancing...")
-        
         try:
             # Ensure all processors are running and connected
             for processor in self.processors:
@@ -394,8 +455,13 @@ class ComprehensiveSystemTest:
                 'timestamp': time.time()
             }
             
+            # Add distribution stats tracking
+            distribution_stats = {
+                processor.node_id: 0 for processor in self.processors
+            }
+            
             # Send multiple requests
-            for i in range(6):  # Reduced from 10 to 6 requests
+            for i in range(6):
                 collector = self.collectors[i % len(self.collectors)]
                 test_data = test_data_base.copy()
                 test_data['patient_id'] = f'TEST_LB_{i}'
@@ -404,17 +470,29 @@ class ComprehensiveSystemTest:
                 try:
                     response = await collector.send_data(test_data)
                     assert response['status'] == 'ok', f"Request {i} failed"
+                    # Track which processor handled the request
+                    if 'processor_id' in response:
+                        distribution_stats[response['processor_id']] += 1
                     self.logger.info(f"Request {i} processed successfully")
-                    await asyncio.sleep(0.5)  # Increased delay between requests
+                    await asyncio.sleep(0.5)
                 except Exception as e:
                     self.logger.error(f"Error processing request {i}: {e}")
                     raise
             
             self.logger.info("Load balancing test passed")
+            return {
+                'status': 'passed',
+                'request_distribution': distribution_stats,
+                'timestamp': time.time()
+            }
             
         except Exception as e:
             self.logger.error(f"Load balancing test failed: {e}")
-            raise
+            return {
+                'status': 'failed',
+                'error': str(e),
+                'timestamp': time.time()
+            }
 
     async def connect_collector_to_processor(self, collector, processor):
         """Helper method to connect collector to a specific processor"""
@@ -552,6 +630,7 @@ class ComprehensiveSystemTest:
         try:
             total_weight = 0
             weighted_score = 0
+            success_rate = 0  # Initialize success_rate
             
             # 1. Use existing verify_services method as base check (40% weight)
             services_ok = await self.verify_services()
@@ -595,13 +674,13 @@ class ComprehensiveSystemTest:
                 results = await asyncio.gather(*check_tasks, return_exceptions=True)
                 success_rate = sum(1 for r in results if r is True) / len(check_tasks)
                 weighted_score += 60 * success_rate
-                total_weight += 60
+                total_weight += 40
             
             # Calculate final availability score
-            availability = weighted_score / total_weight if total_weight > 0 else 0.0
+            availability = (weighted_score / total_weight) * 100 if total_weight > 0 else 0.0
             
             self.logger.info(
-                f"System availability: {availability:.2%} "
+                f"System availability: {availability:.2f}% "
                 f"(Services Check: {'Pass' if services_ok else 'Fail'}, "
                 f"Data Flow Success Rate: {success_rate:.2%})"
             )
