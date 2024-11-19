@@ -31,21 +31,23 @@ async def test_comprehensive_system():
         # Run setup and tests
         await tester.setup()
         
-        # Run core tests
-        test_results = {
-            'normal_operation': await tester.test_normal_operation(),
-            'fault_tolerance': await tester.test_fault_tolerance(),
-            'security': await tester.test_security(),
-            'data_integrity': await tester.test_data_integrity(),
-            'load_balancing': await tester.test_load_balancing()
-        }
+        # Run core tests and collect metrics at each stage
+        test_stages = ['normal_operation', 'fault_tolerance', 'security', 
+                      'data_integrity', 'load_balancing']
         
-        # Calculate metrics
-        metrics = await tester.calculate_reliability_metrics()
+        test_results = {}
+        for stage in test_stages:
+            # Run the test
+            test_results[stage] = await getattr(tester, f"test_{stage}")()
+            
+            # Calculate and record metrics after each test
+            metrics = await tester.calculate_reliability_metrics()
+            visualizer.add_metrics_snapshot(metrics)
         
-        # Generate visualizations
+        # Generate all visualizations
         visualizer.plot_availability_timeline(metrics['availability_timeline'])
         visualizer.plot_reliability_metrics(metrics)
+        visualizer.plot_metrics_over_time()
         
         # Save test results
         with open(test_dir / "test_results.json", "w") as f:
@@ -56,8 +58,6 @@ async def test_comprehensive_system():
         
         # Assert minimum reliability requirements
         assert metrics['mttr'] <= 5.0, "Mean Time To Recovery above 5 seconds"
-      #  assert metrics['uptime_percentage'] >= 99.0, "Uptime percentage below 99%"
-      #  assert metrics['availability'] >= 99.0, "System availability below 99%"
         
     except Exception as e:
         logger.error(f"Test failed with error: {e}")
