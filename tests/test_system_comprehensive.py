@@ -487,23 +487,59 @@ class ComprehensiveSystemTest:
             return False
 
     async def calculate_reliability_metrics(self):
-        """Calculate system reliability metrics"""
+        """Calculate comprehensive system reliability metrics"""
+        current_time = time.time()
+        total_runtime = current_time - self.test_start_time
+        
         metrics = {
+            'mtbf': 0.0,  # Mean Time Between Failures
             'mttr': 0.0,  # Mean Time To Recovery
-            'availability_timeline': [],  # Add this line
+            'availability': 0.0,  # System Availability
+            'failure_rate': 0.0,  # Failures per hour
+            'availability_timeline': [],
+            'uptime_percentage': 0.0
         }
         
-        # Collect availability data points over time
-        # This is just an example - adjust according to your actual monitoring logic
-        start_time = time.time()
-        for _ in range(10):  # Collect 10 data points
-            timestamp = time.time() - start_time
-            availability = await self.check_system_availability()  # You'll need to implement this
-            metrics['availability_timeline'].append((timestamp, availability))
-            await asyncio.sleep(1)  # Wait 1 second between measurements
+        # Calculate MTTR (Mean Time To Recovery)
+        if len(self.recovery_timestamps) > 0 and len(self.failure_timestamps) > 0:
+            recovery_times = []
+            for i in range(min(len(self.recovery_timestamps), len(self.failure_timestamps))):
+                recovery_time = self.recovery_timestamps[i] - self.failure_timestamps[i]
+                recovery_times.append(recovery_time)
             
-        # Calculate MTTR and other metrics
-        # ... your existing metrics calculations ...
+            metrics['mttr'] = sum(recovery_times) / len(recovery_times) if recovery_times else 0
+        
+        # Calculate MTBF (Mean Time Between Failures)
+        if len(self.failure_timestamps) > 1:
+            failure_intervals = []
+            for i in range(1, len(self.failure_timestamps)):
+                interval = self.failure_timestamps[i] - self.failure_timestamps[i-1]
+                failure_intervals.append(interval)
+            
+            metrics['mtbf'] = sum(failure_intervals) / len(failure_intervals)
+        elif len(self.failure_timestamps) == 1:
+            metrics['mtbf'] = self.failure_timestamps[0] - self.test_start_time
+        
+        # Calculate failure rate (failures per hour)
+        hours_running = total_runtime / 3600
+        metrics['failure_rate'] = len(self.failure_timestamps) / hours_running if hours_running > 0 else 0
+        
+        # Calculate uptime percentage
+        metrics['uptime_percentage'] = ((total_runtime - self.total_downtime) / total_runtime) * 100 if total_runtime > 0 else 0
+        
+        # Collect availability data points
+        availability_data = await self.check_system_availability()
+        metrics['availability'] = availability_data
+        metrics['availability_timeline'].append((current_time - self.test_start_time, availability_data))
+        
+        self.logger.info(f"""
+        System Reliability Metrics:
+        - MTBF: {metrics['mtbf']:.2f} seconds
+        - MTTR: {metrics['mttr']:.2f} seconds
+        - Failure Rate: {metrics['failure_rate']:.2f} failures/hour
+        - Uptime: {metrics['uptime_percentage']:.2f}%
+        - Current Availability: {metrics['availability']:.2f}%
+        """)
         
         return metrics
 

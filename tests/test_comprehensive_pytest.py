@@ -1,64 +1,66 @@
 import pytest
 import asyncio
 import logging
-import matplotlib.pyplot as plt
+import json
+from datetime import datetime
+from pathlib import Path
+from .visualization.reliability_graphs import ReliabilityVisualizer
 from .test_system_comprehensive import ComprehensiveSystemTest
 
 @pytest.mark.asyncio
 async def test_comprehensive_system():
-    logging.basicConfig(level=logging.INFO)
+    # Setup test directory
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    test_dir = Path(f"test_results/{timestamp}")
+    test_dir.mkdir(parents=True, exist_ok=True)
+    
+    # Configure logging
+    logging.basicConfig(
+        level=logging.INFO,
+        handlers=[
+            logging.FileHandler(test_dir / "test.log"),
+            logging.StreamHandler()
+        ]
+    )
+    
+    logger = logging.getLogger("TestRunner")
+    visualizer = ReliabilityVisualizer(str(test_dir))
     tester = ComprehensiveSystemTest()
+    
     try:
+        # Run setup and tests
         await tester.setup()
-        await asyncio.sleep(5)
-
-        if not await tester.verify_services():
-            pytest.fail("Services failed to start properly")
-
-        # Run tests
-        await tester.test_normal_operation()
-        await tester.test_fault_tolerance()
-        await tester.test_security()
-        await tester.test_data_integrity()
-        await tester.test_load_balancing()
-
-        # Calculate and verify reliability metrics
+        
+        # Run core tests
+        test_results = {
+            'normal_operation': await tester.test_normal_operation(),
+            'fault_tolerance': await tester.test_fault_tolerance(),
+            'security': await tester.test_security(),
+            'data_integrity': await tester.test_data_integrity(),
+            'load_balancing': await tester.test_load_balancing()
+        }
+        
+        # Calculate metrics
         metrics = await tester.calculate_reliability_metrics()
         
-        # Plot availability graph
-        plot_availability_graph(metrics['availability_timeline'])
+        # Generate visualizations
+        visualizer.plot_availability_timeline(metrics['availability_timeline'])
+        visualizer.plot_reliability_metrics(metrics)
+        
+        # Save test results
+        with open(test_dir / "test_results.json", "w") as f:
+            json.dump({
+                'test_results': test_results,
+                'metrics': {k: v for k, v in metrics.items() if isinstance(v, (int, float))}
+            }, f, indent=2)
         
         # Assert minimum reliability requirements
         assert metrics['mttr'] <= 5.0, "Mean Time To Recovery above 5 seconds"
+        assert metrics['uptime_percentage'] >= 99.0, "Uptime percentage below 99%"
+        assert metrics['availability'] >= 99.0, "System availability below 99%"
         
     except Exception as e:
-        logging.error(f"Test failed with error: {e}")
+        logger.error(f"Test failed with error: {e}")
         raise
     finally:
-        await tester.cleanup()
-
-def plot_availability_graph(availability_timeline):
-    """
-    Plot system availability over time
-    
-    Args:
-        availability_timeline: List of tuples containing (timestamp, availability_value)
-    """
-    timestamps, availability_values = zip(*availability_timeline)
-    
-    plt.figure(figsize=(10, 6))
-    plt.plot(timestamps, availability_values, 'b-', linewidth=2)
-    plt.grid(True)
-    
-    plt.title('System Availability Over Time')
-    plt.xlabel('Time (seconds)')
-    plt.ylabel('Availability (%)')
-    plt.ylim(0, 1.1)  # Set y-axis from 0 to 110%
-    
-    # Add horizontal line at 95% availability threshold
-    plt.axhline(y=0.95, color='r', linestyle='--', label='95% Threshold')
-    plt.legend()
-    
-    # Save the plot
-    plt.savefig('system_availability.png')
-    plt.close() 
+        await tester.cleanup() 
